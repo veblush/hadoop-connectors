@@ -96,6 +96,12 @@ public abstract class GoogleCloudStorageOptions {
 
   public static final GoogleCloudStorageOptions DEFAULT = builder().build();
 
+  /** @deprecated use {@link #builder()} instead */
+  @Deprecated
+  public static Builder newBuilder() {
+    return builder();
+  }
+
   public static Builder builder() {
     return new AutoValue_GoogleCloudStorageOptions.Builder()
         .setGrpcEnabled(ENABLE_GRPC_DEFAULT)
