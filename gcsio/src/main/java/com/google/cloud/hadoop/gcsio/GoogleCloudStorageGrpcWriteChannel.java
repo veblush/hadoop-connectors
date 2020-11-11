@@ -65,6 +65,8 @@ import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Implements WritableByteChannel to provide write access to GCS via gRPC. */
 public final class GoogleCloudStorageGrpcWriteChannel
@@ -101,6 +103,8 @@ public final class GoogleCloudStorageGrpcWriteChannel
   private final boolean checksumsEnabled;
 
   private GoogleCloudStorageItemInfo completedItemInfo = null;
+
+  private static final Logger LOG = LoggerFactory.getLogger(GoogleCloudStorageGrpcWriteChannel.class);
 
   GoogleCloudStorageGrpcWriteChannel(
       ExecutorService threadPool,
@@ -238,7 +242,11 @@ public final class GoogleCloudStorageGrpcWriteChannel
 
       // Wait for streaming RPC to become ready for upload.
       try {
-        responseObserver.ready.await();
+        if (responseObserver.ready.await(10L, SECONDS)) {
+          LOG.info("responseObserver.ready.await ({}) PASS (uploadId={})", System.identityHashCode(responseObserver), uploadId);
+        } else {
+          LOG.info("responseObserver.ready.await ({}) TIMEOUT (uploadId={})", System.identityHashCode(responseObserver), uploadId);
+        }
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         throw new IOException(
@@ -380,6 +388,7 @@ public final class GoogleCloudStorageGrpcWriteChannel
       final CountDownLatch ready = new CountDownLatch(1);
 
       InsertChunkResponseObserver(String uploadId, long writeOffset) {
+        LOG.info("InsertChunkResponseObserver({}).ctor", System.identityHashCode(this));
         this.uploadId = uploadId;
         this.writeOffset = writeOffset;
       }
@@ -389,7 +398,7 @@ public final class GoogleCloudStorageGrpcWriteChannel
           throw new IOException(
               String.format("Resumable upload failed for '%s'", getResourceString()),
               nonTransientError);
-      }
+        }
         return checkNotNull(response, "Response not present for '%s'", resourceId);
       }
 
@@ -403,11 +412,13 @@ public final class GoogleCloudStorageGrpcWriteChannel
 
       @Override
       public void onNext(Object response) {
+        LOG.info("InsertChunkResponseObserver({}).onNext", System.identityHashCode(this));
         this.response = response;
       }
 
       @Override
       public void onError(Throwable t) {
+        LOG.info("InsertChunkResponseObserver({}).onError", System.identityHashCode(this));
         Status s = Status.fromThrowable(t);
         String statusDesc = s == null ? "" : s.getDescription();
 
@@ -434,13 +445,20 @@ public final class GoogleCloudStorageGrpcWriteChannel
 
       @Override
       public void onCompleted() {
+        LOG.info("InsertChunkResponseObserver({}).onCompleted", System.identityHashCode(this));
         done.countDown();
       }
 
       @Override
       public void beforeStart(
           ClientCallStreamObserver<InsertObjectRequest> clientCallStreamObserver) {
-        clientCallStreamObserver.setOnReadyHandler(() -> ready.countDown());
+        Integer hc = System.identityHashCode(this);
+        LOG.info("InsertChunkResponseObserver({}).beforeStart()", hc);
+        clientCallStreamObserver.setOnReadyHandler(
+            () -> {
+              LOG.info("InsertChunkResponseObserver({}).onReady", hc);
+              ready.countDown();
+            });
       }
     }
 
@@ -459,6 +477,8 @@ public final class GoogleCloudStorageGrpcWriteChannel
 
     /** Send a StartResumableWriteRequest and return the uploadId of the resumable write. */
     private String startResumableUpload() throws IOException {
+      LOG.info("startResumableUpload ({}) start({}, {})", System.identityHashCode(this), resourceId.getBucketName(), resourceId.getObjectName());
+
       InsertObjectSpec.Builder insertObjectSpecBuilder =
           InsertObjectSpec.newBuilder()
               .setResource(
@@ -507,6 +527,7 @@ public final class GoogleCloudStorageGrpcWriteChannel
             String.format("Failed to start resumable upload for '%s'", getResourceString()), e);
       }
 
+      LOG.info("startResumableUpload ({}) uploadId={}", System.identityHashCode(this), responseObserver.getResponse().getUploadId());
       return responseObserver.getResponse().getUploadId();
     }
 
